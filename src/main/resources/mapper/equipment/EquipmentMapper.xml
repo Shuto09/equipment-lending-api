@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  備品の SQL（docs/要件と設計.md §10）。
+  - 値はすべて #{}（バインド変数）で渡す。文字列をそのまま埋め込む書き方はしない（MapperXmlSafetyTest で検査）。
+  - DB の時刻関数は使わない。今日の日付・日時はアプリの Clock から #{today} などで受ける（同じテストで検査）。
+-->
+<mapper namespace="com.example.lending.equipment.EquipmentMapper">
+
+  <resultMap id="equipmentRow" type="EquipmentRow">
+    <constructor>
+      <idArg column="id" javaType="_long"/>
+      <arg column="asset_code" javaType="String"/>
+      <arg column="name" javaType="String"/>
+      <arg column="category" javaType="EquipmentCategory"/>
+      <arg column="remarks" javaType="String"/>
+      <arg column="status" javaType="EquipmentStatus"/>
+      <arg column="disposed_at" javaType="java.time.OffsetDateTime"/>
+      <arg column="version" javaType="_int"/>
+      <arg column="created_at" javaType="java.time.OffsetDateTime"/>
+    </constructor>
+  </resultMap>
+
+  <resultMap id="equipmentView" type="EquipmentView">
+    <constructor>
+      <idArg column="id" javaType="_long"/>
+      <arg column="asset_code" javaType="String"/>
+      <arg column="name" javaType="String"/>
+      <arg column="category" javaType="EquipmentCategory"/>
+      <arg column="remarks" javaType="String"/>
+      <arg column="availability" javaType="Availability"/>
+      <arg column="version" javaType="_int"/>
+      <arg column="created_at" javaType="java.time.OffsetDateTime"/>
+      <arg column="disposed_at" javaType="java.time.OffsetDateTime"/>
+      <arg column="borrower_id" javaType="Long"/>
+      <arg column="borrower_name" javaType="String"/>
+      <arg column="due_date" javaType="java.time.LocalDate"/>
+    </constructor>
+  </resultMap>
+
+  <sql id="equipmentColumns">
+    id, asset_code, name, category, remarks, status, disposed_at, version, created_at
+  </sql>
+
+  <!--
+    備品＋貸出状態（availability）＋今の借り手。貸出状態は保存せず、ここの CASE 式 1 か所で求める。
+    未返却の貸出を LEFT JOIN しても備品の行は増えない（部分一意インデックス uq_loans_open_equipment で 1 台 1 件まで）。
+  -->
+  <sql id="equipmentWithAvailability">
+    SELECT e.id, e.asset_code, e.name, e.category, e.remarks, e.version, e.created_at, e.disposed_at,
+           l.borrower_id, u.display_name AS borrower_name, l.due_date,
+           CASE WHEN e.status = 'DISPOSED'    THEN 'DISPOSED'
+                WHEN l.id IS NULL             THEN 'AVAILABLE'
+                WHEN l.due_date &lt; #{today} THEN 'OVERDUE'
+                ELSE 'LENT' END AS availability
+      FROM equipment e
+      LEFT JOIN loans l ON l.equipment_id = e.id AND l.returned_at IS NULL
+      LEFT JOIN users u ON u.id = l.borrower_id
+  </sql>
+
+  <!-- 件数の文と一覧の文で同じ条件を使う（食い違いを防ぐ） -->
+  <sql id="searchWhere">
+    <where>
+      <if test="keywordPattern != null">
+        AND (t.name ILIKE #{keywordPattern} ESCAPE '\' OR t.asset_code ILIKE #{keywordPattern} ESCAPE '\')
+      </if>
+      <if test="categories != null and !categories.isEmpty()">
+        AND t.category IN
+        <foreach collection="categories" item="category" open="(" separator="," close=")">#{category}</foreach>
+      </if>
+      <choose>
+        <when test="availability != null">AND t.availability = #{availability}</when>
+        <otherwise>AND t.availability &lt;&gt; 'DISPOSED'</otherwise>
+      </choose>
+    </where>
+  </sql>
+
+  <select id="search" resultMap="equipmentView">
+    SELECT *
+      FROM (<include refid="equipmentWithAvailability"/>) t
+    <include refid="searchWhere"/>
+     ORDER BY
+    <!-- 並び替えは許可リスト（EquipmentSortKey）の名前で列を選ぶ。利用者の入力は SQL の文字列に入らない -->
+    <choose>
+      <when test="sort.key().name() == 'NAME'">t.name</when>
+      <when test="sort.key().name() == 'CATEGORY'">t.category</when>
+      <when test="sort.key().name() == 'CREATED_AT'">t.created_at</when>
+      <when test="sort.key().name() == 'DUE_DATE'">t.due_date</when>
+      <otherwise>t.asset_code</otherwise>
+    </choose>
+    <if test="sort.descending()">DESC</if> NULLS LAST, t.id
+     LIMIT #{limit} OFFSET #{offset}
+  </select>
+
+  <select id="count" resultType="_long">
+    SELECT count(*)
+      FROM (<include refid="equipmentWithAvailability"/>) t
+    <include refid="searchWhere"/>
+  </select>
+
+  <select id="findView" resultMap="equipmentView">
+    SELECT *
+      FROM (<include refid="equipmentWithAvailability"/>) t
+     WHERE t.id = #{id}
+  </select>
+
+  <select id="findById" resultMap="equipmentRow">
+    SELECT <include refid="equipmentColumns"/>
+      FROM equipment
+     WHERE id = #{id}
+  </select>
+
+  <!-- 廃棄と貸出の判定の前に取る行ロック。同じ備品への廃棄と貸出は、ここで直列化される -->
+  <select id="lockById" resultMap="equipmentRow">
+    SELECT <include refid="equipmentColumns"/>
+      FROM equipment
+     WHERE id = #{id}
+       FOR UPDATE
+  </select>
+
+  <insert id="insert" useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+    INSERT INTO equipment (asset_code, name, category, remarks, created_at)
+    VALUES (#{assetCode}, #{name}, #{category}, #{remarks}, #{createdAt})
+  </insert>
+
+  <!-- 楽観ロック: 読んだときの version と一致し、廃棄済みでない時だけ更新する。送られた列だけを書く -->
+  <update id="updateWithVersion">
+    UPDATE equipment
+    <set>
+      <if test="name != null">name = #{name},</if>
+      <if test="category != null">category = #{category},</if>
+      <if test="remarksChanged">remarks = #{remarks},</if>
+      version = version + 1
+    </set>
+     WHERE id = #{id}
+       AND version = #{version}
+       AND status = 'ACTIVE'
+  </update>
+
+  <select id="hasOpenLoan" resultType="_boolean">
+    SELECT EXISTS (SELECT 1 FROM loans WHERE equipment_id = #{equipmentId} AND returned_at IS NULL)
+  </select>
+
+  <update id="markDisposed">
+    UPDATE equipment
+       SET status = 'DISPOSED', disposed_at = #{disposedAt}, version = version + 1
+     WHERE id = #{id}
+  </update>
+
+</mapper>

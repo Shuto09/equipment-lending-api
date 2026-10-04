@@ -1,9 +1,11 @@
+# 手元で動かす PostgreSQL（./mvnw spring-boot:run で spring-boot-docker-compose が起動する）
+# 値は手元専用。テスト（Testcontainers）と同じ postgres:17 を使う。
 services:
   postgres:
-    image: 'postgres:latest'
+    image: 'postgres:17'
     environment:
-      - 'POSTGRES_DB=mydatabase'
-      - 'POSTGRES_PASSWORD=secret'
-      - 'POSTGRES_USER=myuser'
+      - 'POSTGRES_DB=lending'
+      - 'POSTGRES_PASSWORD=lending'
+      - 'POSTGRES_USER=lending'
     ports:
       - '5432'
