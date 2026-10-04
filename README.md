@@ -34,7 +34,7 @@
    アプリ（Spring MVC）に届いた要求の失敗応答には、機械で見分ける `code` が付きます（URL の形が壊れているなど、手前の Tomcat で弾かれる要求は除く。[要件と設計 §7](docs/要件と設計.md#7-エラーの表し方problemdetailrfc-9457)）。`type` は入力検証・401・403・業務エラー（404 の `EQUIPMENT_NOT_FOUND` なども含む）ではコードごとの URI、存在しないパスの 404・405・406・415・500 などでは `about:blank` です（[`ErrorCode`](src/main/java/com/example/lending/shared/error/ErrorCode.java)・[`ApiExceptionHandler`](src/main/java/com/example/lending/shared/error/ApiExceptionHandler.java)）。409（対象の今の状態と衝突）と 422（業務規則に反する）を使い分けます。
    500 では例外の詳細を応答に出さず、一般的な文と `traceId` を返します（詳細は同じ `traceId` でログにだけ出す）。認証は引数の解決より前の interceptor で行うので、401 は入力検証の 400 より先に返ります（[`AuthenticationInterceptor`](src/main/java/com/example/lending/user/AuthenticationInterceptor.java)）。
 6. **競合を実際に起こしてテストする。**
-   8 本のスレッドを `CountDownLatch` でそろえ、本物の PostgreSQL 17 に同時に書き込みます（[`ConcurrentLendingTest`](src/test/java/com/example/lending/loan/ConcurrentLendingTest.java#L158-L190)）。
+   最大 8 本（CT-1 は 8 本、CT-3 は 6 本、CT-2・CT-4・CT-5 は 2 本）のスレッドを `CountDownLatch` でそろえ、本物の PostgreSQL 17 に同時に書き込みます（[`ConcurrentLendingTest`](src/test/java/com/example/lending/loan/ConcurrentLendingTest.java#L158-L190)）。
    ロックや制約を 1 か所ずつ外した写しで、狙ったテストが赤になることも確かめました（結果は [テスト計画 §5](docs/テスト計画.md#5-同時実行テスト)）。
 
 ## 使っている技術

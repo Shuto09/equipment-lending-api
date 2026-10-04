@@ -35,7 +35,7 @@ public enum ErrorCode {
 	REQUEST_REJECTED(HttpStatus.BAD_REQUEST, null),
 	INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, null);
 
-	/** RFC 9457 の例と同じ仮の基底 URI。実運用では自分のドメインにして説明ページを置く（§16 Q3）。 */
+	/** RFC 9457 の例と同じ example.com ドメインの仮の基底 URI。実運用では自分のドメインにして説明ページを置く（§16 Q3）。 */
 	private static final String TYPE_BASE = "https://example.com/problems/";
 
 	private static final URI ABOUT_BLANK = URI.create("about:blank");
