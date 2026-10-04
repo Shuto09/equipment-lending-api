@@ -1,13 +1,15 @@
 -- 手元で動かすときの架空の初期データ（demo プロファイルだけで読む。テストでは読まない）
 -- Flyway の繰り返し実行のマイグレーション（中身が変わるたびに再実行される）なので、何度流しても同じ結果になるように書く。
 -- 人名・メールアドレス・管理番号はすべて架空。
--- 新しい DB に流した場合の利用者の id: 1 = 鈴木 一郎（ADMIN）・2 = 山田 太郎・3 = 佐藤 花子（X-User-Id に使う）。
+-- 新しい DB に流した場合の利用者の id: 1 = 鈴木 一郎（ADMIN）・2 = 山田 太郎・3 = 佐藤 花子・4 = 田中 次郎（X-User-Id に使う）。
 -- 日付は固定（時刻を決めるのはアプリの Clock だけ、という方針に合わせる）。動かす日によっては貸出が延滞に見える。
+-- 田中さんには貸出を持たせない（いつ動かしても延滞が無く、借りる操作を試せるように）。
 
 INSERT INTO users (display_name, email, role) VALUES
     ('鈴木 一郎', 'suzuki@example.com', 'ADMIN'),
     ('山田 太郎', 'yamada@example.com', 'MEMBER'),
-    ('佐藤 花子', 'sato@example.com',   'MEMBER')
+    ('佐藤 花子', 'sato@example.com',   'MEMBER'),
+    ('田中 次郎', 'tanaka@example.com', 'MEMBER')
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO equipment (asset_code, name, category, remarks, created_at) VALUES

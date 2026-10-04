@@ -1,0 +1,31 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{xml,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Java と pom.xml はタブ（start.spring.io の雛形と同じ）。後に書いた節が優先される
+[*.java]
+indent_style = tab
+indent_size = 4
+
+[pom.xml]
+indent_style = tab
+indent_size = 4
+
+[*.sql]
+indent_style = space
+indent_size = 4
+
+# Markdown の行末の空白 2 つは改行の意味を持つ
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cmd]
+end_of_line = crlf

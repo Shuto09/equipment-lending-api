@@ -1,32 +1,65 @@
 # AI 開発の手順
 
 - この文書は Claude Code（Anthropic の AI）で作成しました。
-- 状態: 実装中。実装は 3 回に分けて進める（1: 雛形・共通基盤・備品／2: 貸出と同時実行のテスト／3: E2E・OpenAPI の一致の検査・README）。ここには、各回に AI が何をどう確かめたかと、人が確かめるべき点を書き足していく。
+- このリポジトリのコード・テスト・文書は、すべて Claude Code で作りました。ここには、どの順で何を作り、どう確かめたかを、記録（git の履歴・各文書の変更履歴・テストの実行結果）に残っている範囲で書きます。記録の無いこと（人が書いた・人がレビューした・本番で動かした など）は書きません。
+- AI に作業させる時の決まりは [CLAUDE.md](../CLAUDE.md) にまとめています。
 
-## 進め方
+## 工程
 
-1. 設計（[要件と設計](要件と設計.md)・[テスト計画](テスト計画.md)）を先に書き、AI による設計レビューの指摘を反映してから実装に入る。
-2. 実装は設計どおりに作る。作る途中で設計と違う判断をしたら、同じ回で設計書も直す（各文書の変更履歴に残す）。
-3. テストは Docker の要らないもの（単体・Web 層）を手元で回し、Testcontainers を使うものを含む全部は Docker が動く Linux マシンで `./mvnw -B -ntp verify` を回す。
+| # | 工程 | 中身 | 状態（2026-10-04 時点） |
+|---|---|---|---|
+| 1 | 要件と設計 | [要件と設計](要件と設計.md)・[テスト計画](テスト計画.md) の v0.1 を、実装の前に書く | 済 |
+| 2 | 設計レビュー | AI（Claude Code）が設計を見直し、指摘を設計書に反映する（v0.2） | 済 |
+| 3 | 実装 1/3 | 雛形・共通基盤・備品 | 済 |
+| 4 | 実装 2/3 | 貸出・返却・延滞と、同時実行のテスト | 済 |
+| 5 | 実装 3/3 | E2E・OpenAPI の一致の検査・README などの文書・CI | 済 |
+| 6 | 多観点レビュー | 実装を複数の観点で見直す | 未実施（この文書を書いた時点） |
+| 7 | 修正 | 6 の指摘を直す | 未実施 |
+| 8 | 事実確認 | README と文書の主張を、1 文ずつ根拠（コード・テストの結果・実測）と突き合わせる | 未実施 |
 
-## 実装 1/3: 雛形・共通基盤・備品（2026-10-04）
+6〜8 は、行った時にこの文書へ節を足します。
+
+## 全工程に共通する決まり
+
+指示で決めた条件（実装 3/3 の指示に含まれていたもの。それより前の工程の指示文はこのリポジトリに残っていないので、各工程の記録から分かる範囲です）:
+
+- 題材は社内の備品の貸出管理 API。読み手が短い時間で、業務ロジックの設計・SQL（MyBatis の動的 SQL）・トランザクションと同時実行・テスト・AI での作り方を読み取れることを優先し、作り込み過ぎない。
+- 技術: Java 21・Spring Boot 4.1 系・MyBatis（XML のマッパー中心）・PostgreSQL 17・Flyway・Bean Validation・ProblemDetail（RFC 9457）・springdoc-openapi・JUnit 5・AssertJ・Mockito・Testcontainers・Maven Wrapper・GitHub Actions・compose.yaml。認証は範囲外で、`X-User-Id` ヘッダのデモ方式にする。
+- 外部から取るのは公式の配布元（start.spring.io・Maven Central・Docker Hub の公式イメージ）だけ。実装 3/3 では、CI で使う actions のバージョンを確かめるため、各 action の公式リポジトリ（GitHub の `actions/checkout`・`actions/setup-java`）のリリース情報も読んだ。
+- 実在の会社・人・顧客の情報を入れない。テストのデータは架空（人名は一般的な例、メールは `example.com`）。
+- AI で作ったことを README に明記する。記録の無い主張は書かない。性能・件数などの数値は実測した値だけを、実行したコマンドと日付を付けて書く。
+
+テストを緑にする決まり:
+
+- Docker の要らないテスト（単体・Web 層・機械的な検査）は手元で `./mvnw -B -ntp test -DexcludedGroups=docker`。Testcontainers を使うものを含む全部は、Docker の動く Linux マシンの `eclipse-temurin:25-jdk` のコンテナの中で `./mvnw -B -ntp verify` を回す（手元の Docker が動いていないため）。
+- 各回の終わりに全テストが緑であることを確かめてから commit する。テストを消したり無効にしたりして緑にしない。
+- 設計と違う判断をしたら、同じ回で設計書を直し、変更履歴に残す。
+- 同時実行のテストは、ロックや制約を 1 か所ずつ外した写しで赤になることも確かめる（効いていないテストを緑のまま残さない）。
+
+## 1. 要件と設計（2026-10-04）
+
+- 成果: [要件と設計](要件と設計.md) と [テスト計画](テスト計画.md) の v0.1（実装の前）。業務ルール R1〜R9、受け入れ条件（AC）、データモデル、API 一覧、排他制御の方針、採らなかった案、未決事項を先に決めた。
+- 受け入れ条件の文は、そのままテストの `@DisplayName` に使う前提で書いた（テスト計画 §6 で AC とテストを対応付ける）。
+
+## 2. 設計レビュー（2026-10-04）
+
+- AI（Claude Code）が設計書を見直し、指摘 21 件を v0.2 に反映した。主な観点は、各文書の変更履歴 v0.2 にあるとおり: 認証の位置（引数のリゾルバだけだと 400 が 401 より先になる → interceptor へ移す）・見せる範囲（借り手の表示名・メールアドレス）・Spring MVC の例外と `code` の対応・problem の `type`・409 と 422 の定義・テストの分け方（コンテナの数・合成注釈・後片付け）・機械的な検査の範囲・用語の統一。
+- 反映の後にもう一度見直し、漏れを追記した（`@AppDbTest` に `@AutoConfigureRestTestClient` が要ること、`MutableClock` を `@Primary` で登録すること、`/api/` の下の存在しないパスの 401／404 など）。
+- 採らなかった案とその理由は [要件と設計 §13](要件と設計.md#13-採らなかった案と理由) に残した。
+
+## 3. 実装 1/3: 雛形・共通基盤・備品（2026-10-04）
 
 - 雛形: [技術のバージョンの確認](#技術のバージョンの確認) の生成の URL で start.spring.io から作り、`mybatis-spring-boot-starter`（4.1.0）・`mybatis-spring-boot-starter-test`（4.1.0）・`springdoc-openapi-starter-webmvc-ui`（3.1.1）を `pom.xml` に足した。PostgreSQL の JDBC ドライバは、制約名を `PSQLException` から取り出すのでコンパイル時の依存に変えた。
 - 作った物: Flyway の V1（3 表・制約・索引）と demo プロファイルだけの初期データ／ProblemDetail の例外ハンドラ・`ErrorCode`・X-User-Id の認証（interceptor と引数リゾルバ）・ページングと並び替えの型・LIKE のエスケープ・制約名の取り出し／備品の登録・検索・詳細・更新・廃棄（コントローラ・サービス・MyBatis の XML）／GitHub Actions の設定。
 - テスト: 単体（`EquipmentServiceTest`・`SortParserTest`・`LikePatternsTest`）・機械検査（`MapperXmlSafetyTest`）・Web 層（`EquipmentControllerTest`・`ApiExceptionHandlerTest`）・マッパー（`EquipmentMapperTest`・`SchemaConstraintTest`・`UserMapperTest`。本物の PostgreSQL 17）・文脈の起動（`contextLoads`）。
-- 確かめた結果: 2026-10-04、Docker の動く Linux マシンで `eclipse-temurin:25-jdk` のコンテナの中から `./mvnw -B -ntp verify` を実行し、テスト 174 件がすべて成功（失敗・スキップ 0）。GitHub Actions ではまだ流していない（リポジトリを公開した後に確かめる）。
+- 確かめた結果: 2026-10-04、Docker の動く Linux マシンで `eclipse-temurin:25-jdk` のコンテナの中から `./mvnw -B -ntp verify` を実行し、テスト 174 件がすべて成功（失敗・スキップ 0）。
 - 実装の途中で分かり、設計書を直したこと（詳細は各文書の変更履歴 v0.3）:
   - Boot 4.1.1 と MyBatis Starter 4.1.0 は組めた（未決事項 Q1 の解決）。
   - MyBatis の `<if test>`（OGNL）で入れ子の record の項目を読む時は `sort.key()` のようにメソッド呼び出しで書く。
   - Jackson 3 は既定で項目名の辞書順に並べるので、ProblemDetail の項目が `detail`・`instance`… の順になっていた。設定で切り、RFC 9457 の例と同じ並びにした（実際の応答を出力して気づいた）。
   - 406・415 は 401 より先になると設計に書いていたが、マッピングに `produces`・`consumes` を書いていないので、実際は認証の後に決まる。設計の文を直した（405 は認証より先のまま）。
-- 人が確かめるべき点:
-  - [ ] `mapper/equipment/EquipmentMapper.xml` の検索の SQL（貸出状態の `CASE`・並び替えの `<choose>`・件数の文と一覧の文の条件の共有）が意図どおりに読めるか。
-  - [ ] 入力検証の文（Hibernate Validator の日本語の文、例「null は許可されていません」）を、利用者向けにすべて自分の文へ書き換えるか。
-  - [ ] PATCH で変更する項目が 0 個の時の `errors` の `pointer` が `#/anyFieldPresent`（本文に無い名前）になる点を許すか（要件と設計 §6）。
-  - [ ] `compose.yaml` の DB の利用者名・パスワードは手元専用の値であること。
 
-## 実装 2/3: 貸出（2026-10-04）
+## 4. 実装 2/3: 貸出（2026-10-04）
 
 - 作った物: 貸出・返却・貸出一覧・貸出の詳細・延滞一覧（`loan` パッケージのコントローラ・サービス・MyBatis の XML）と、利用者行のロック（`UserMapper#lockById`）。
 - 進め方: 設計の §4（判定の順番）・§8（ロックの順番）・§9（トランザクションの境界）を、そのまま `LoanService#lend` の文の順番にした。順番は Javadoc に番号付きで書き、単体テストで「複数に当たる時は最初のエラーを返す」「ロックは利用者 → 備品」を確かめる。
@@ -35,17 +68,61 @@
   - Web 層 `LoanControllerTest`（23 件）。
   - マッパー `LoanMapperTest`（11 件）と `UserMapperTest` の 1 件（本物の PostgreSQL 17）。
   - 同時実行 `ConcurrentLendingTest`（62 件）: CT-1・CT-3・CT-4 を 20 回ずつ、CT-2・CT-5 を 1 回ずつ。8 本のスレッドを `CountDownLatch` でそろえてから一斉にサービスを呼び、結果の集計を丸ごと比べる。
-- 確かめた結果: 2026-10-04、Docker の動く Linux マシンで `eclipse-temurin:25-jdk` のコンテナの中から `./mvnw -B -ntp verify` を実行し、テスト 304 件がすべて成功した（失敗・スキップは 0）。GitHub Actions ではまだ流していない。
+- 確かめた結果: 2026-10-04、同じ方法で `./mvnw -B -ntp verify` を実行し、テスト 304 件がすべて成功した（失敗・スキップは 0）。
 - 排他制御が本当に効いているかの確認: ロックと制約を 1 か所ずつ外した写しで同時実行のテストを流し、狙ったテストが赤になることを確かめた（M1〜M4。結果は [テスト計画 §5](テスト計画.md#5-同時実行テスト)）。本体のコードは書き換えていない。
 - 実装の途中で決め、設計書に書き足したこと（要件と設計 v0.4・テスト計画 v0.4）:
   - 応答の `state`（`LENT`/`OVERDUE`/`RETURNED`）と一覧の絞り込みの `state`（`OPEN`/`RETURNED`/`ALL`）は値の種類が違うので、enum を分けた（`LoanState`・`LoanStateFilter`）。
   - 応答の `state` は絞り込みに使わないので、SQL ではなく Java で求めた（備品の貸出状態は絞り込みに使うので SQL の `CASE`）。
   - 未返却の貸出の `returnedLate` は `false` にした（`null` にしない）。
-- 人が確かめるべき点:
+
+## 5. 実装 3/3: E2E・OpenAPI の一致の検査・文書・CI（2026-10-04）
+
+- 指示の要点: Swagger UI のパスを README に書く・Actuator は health だけを公開・compose.yaml とローカル／テストの設定・GitHub Actions（ubuntu-latest・Java 21・`./mvnw -B verify`）・README（見本であること・主な設計判断を 5 つ前後・API 一覧と curl の例・起動方法・テストの回し方・ディレクトリ構成・AI で作ったことの明記。誇張しない）・この文書と CLAUDE.md・LICENSE（MIT）・.gitignore・.editorconfig。全テストを緑にし、README の curl の例は実際に起動して叩くか、API のテストに同じ要求があることを確かめる。
+- 作った物:
+  - テスト: `LendingApiEndToEndTest`（テスト計画 §4-4 の手順 1〜9 を、本物の PostgreSQL につないだアプリに HTTP で 1 本通す）・`OpenApiContractTest`（3 件。`/v3/api-docs` の「メソッド＋パス」が設計 §6 の 10 本と一致・全操作に必須の `X-User-Id`・`CurrentUser` が載っていない）・`PublicEndpointsTest`（6 件。Swagger UI が開ける・health が UP・health 以外の Actuator は 404）。
+  - 文書: [README](../README.md)・[CLAUDE.md](../CLAUDE.md)・[実行計画の実測](実行計画の実測.md)（データと SQL は `docs/explain/`）・この文書の書き直し・LICENSE・.editorconfig。
+  - 設定: GitHub Actions の `actions/checkout` を v4 → v7、`actions/setup-java` を v4 → v6 に上げた（2026-10-04 に GitHub の各リポジトリの最新リリースを確認。setup-java には v4 が非推奨だと警告を出す版 v4.9.1 が出ていた）。checkout は `persist-credentials: false` にし、ジョブに 20 分の上限を付けた。
+- 途中で見つけて直したこと:
+  - `mvnw` が実行権限の無いファイル（git のモード 100644）として入っていた。GitHub Actions の `./mvnw` が実行できないので、`git update-index --chmod=+x mvnw` で 100755 にした。これまでの確認はリポジトリの写しで毎回 `chmod +x` していたので表に出ていなかった。
+  - `compose.yaml` の PostgreSQL がホストの全アドレスで待ち受けていた。手元専用のパスワードなので、`127.0.0.1` だけにした（`spring-boot-docker-compose` が接続先を拾えることは下の起動で確かめた）。
+  - 初期データの日付は固定なので、2026-10-19 より後に動かすと、山田さん・佐藤さんは延滞があって新しく借りられない（422）。README の「借りる」の例がいつでも通るように、貸出を持たない利用者（田中 次郎）を初期データに足し、例の借り手にした。佐藤さんは 2026-10-04 の時点で延滞があり、借りると 422 `BORROWER_HAS_OVERDUE` になることも確かめた。
+- 確かめた結果（2026-10-04）:
+  - `./mvnw -B -ntp verify`（同じ方法）: 314 件すべて成功（失敗・エラー・スキップ 0）。
+  - `./mvnw -B -ntp test -DexcludedGroups=docker`（Windows 11・JDK 21）: 195 件すべて成功。
+  - README の curl の例: 下の [README の例の確かめ方](#readme-の例の確かめ方)。
+  - `EXPLAIN (ANALYZE, BUFFERS)`: 架空のデータで取り、[実行計画の実測](実行計画の実測.md) に載せた。結果は設計 §10 の見込み（備品検索は索引がほぼ効かない・延滞一覧は部分索引の順に読める）と同じだった。
+- 設計書に書き足したこと（要件と設計 v0.5・テスト計画 v0.5）: 実装の規模の実測、`EXPLAIN` の結果への参照、`PublicEndpointsTest`、テストの件数と所要時間の実測、完了の条件の確認結果。
+
+## README の例の確かめ方
+
+README の [curl の例](../README.md#curl-の例) は、2026-10-04 に次の手順で 1 回ずつ実行し、状態コードと応答を目で確かめた（10 本の API・401・Swagger UI・OpenAPI・health）。
+
+1. Docker の動く Linux マシンで、リポジトリの写しの中から `./mvnw spring-boot:run -Dspring-boot.run.profiles=demo` を実行した（`eclipse-temurin:25-jdk` のコンテナの中。ホストの `docker` コマンドと `docker compose` を渡し、`spring-boot-docker-compose` が `compose.yaml` の PostgreSQL を起動した）。
+2. 確かめた環境の都合で、次の環境変数だけを足した: `SERVER_PORT=18089`・`SERVER_ADDRESS=127.0.0.1`（ほかのサービスと待ち受けがぶつからないように）・`COMPOSE_PROJECT_NAME`（ほかの compose と名前がぶつからないように）・`LOGGING_LEVEL_COM_EXAMPLE_LENDING=DEBUG`（`EXPLAIN` に使う SQL をログから取るため）。
+3. README の curl の行をそのまま、`localhost:8080` だけを `127.0.0.1:18089` に置き換えて、上から順に流した。結果は README に書いた期待（201・409・401 など）のとおりだった。README の例を直した後（借り手を田中さんに変えた）、新しい DB でもう一度流し直した。README の応答の実例 2 つは、この 2 回目の出力を整形したもの。
+4. 終わった後、アプリを止め（`compose.yaml` の PostgreSQL も止まったことを確かめた）、コンテナと作ったネットワークを消した。
+
+同じ種類の要求（登録・検索・貸出・二重貸出の 409・延滞一覧・返却・廃棄・401。id や日付は違う）は、`LendingApiEndToEndTest` でもテストのたびに確かめている。
+
+## 人に判断してほしい点（未判断）
+
+この文書を書いた時点で、人が判断したことの記録はこのリポジトリにありません。次の点は AI が決めて先に進めたので、人の判断を待っています。
+
+- 業務ルール・API の形:
   - [ ] `LoanService#lend` の判定の順番とロックの順番が、業務として意図どおりか（要件と設計 §4・§8）。
-  - [ ] 同時実行のテストの繰り返し 20 回で足りるか。M1 では 20 回中 19 回だけ赤になった。1 回の実行で見逃すことは少ないが、0 ではない。
   - [ ] 未返却の貸出の `returnedLate` を `false` で返す点。
   - [ ] 貸出の時に利用者行が見つからなければ 401 にしている点。利用者を消す API は無いので、起きない想定。
+  - [ ] PATCH で変更する項目が 0 個の時の `errors` の `pointer` が `#/anyFieldPresent`（本文に無い名前）になる点を許すか（要件と設計 §6）。
+  - [ ] 入力検証の文（Hibernate Validator の日本語の文、例「null は許可されていません」）を、利用者向けにすべて自分の文へ書き換えるか。
+- SQL とテスト:
+  - [ ] `mapper/equipment/EquipmentMapper.xml` の検索の SQL（貸出状態の `CASE`・並び替えの `<choose>`・件数の文と一覧の文の条件の共有）が意図どおりに読めるか。
+  - [ ] 同時実行のテストの繰り返し 20 回で足りるか。M1 では 20 回中 19 回だけ赤になった。1 回の実行で見逃すことは少ないが、0 ではない。
+  - [ ] `EXPLAIN` の架空データの規模（備品 5,000 台・貸出 51,500 件）が、想定の規模の説明として妥当か。
+- 公開と運用:
+  - [ ] GitHub Actions ではまだ一度も流していない。push の後に緑になるか確かめる。
+  - [ ] README のコードへのリンクは、ファイルと行番号への相対リンク（既定のブランチの最新を指す）。特定のコミットに固定した permalink にするなら、push の後に書き換える。
+  - [ ] `postgres:17` のタグをマイナーバージョン（例 `17.11`）まで固定するか（要件と設計 §16 Q2）。
+  - [ ] `compose.yaml` の DB の利用者名・パスワードは手元専用の値であること。
 
 ## 技術のバージョンの確認
 
@@ -61,6 +138,9 @@ curl -s 'https://start.spring.io/starter.zip?type=maven-project&bootVersion=4.1.
 curl -s https://repo1.maven.org/maven2/org/mybatis/spring/boot/mybatis-spring-boot/4.1.0/mybatis-spring-boot-4.1.0.pom | grep spring-boot.version
 # Boot 4.1.1 が管理するバージョン
 curl -s https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-dependencies/4.1.1/spring-boot-dependencies-4.1.1.pom | grep -E 'flyway|testcontainers|junit-jupiter'
+# GitHub Actions の最新リリース（実装 3/3 で確認）
+curl -s https://api.github.com/repos/actions/checkout/releases/latest
+curl -s https://api.github.com/repos/actions/setup-java/releases/latest
 ```
 
 - 生成の URL（mybatis 以外で生成し、`mybatis-spring-boot-starter` と `mybatis-spring-boot-starter-test` の 4.1.0 を `pom.xml` に足す）:

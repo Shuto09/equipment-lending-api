@@ -1,5 +1,6 @@
-# 手元で動かす PostgreSQL（./mvnw spring-boot:run で spring-boot-docker-compose が起動する）
+# 手元で動かす PostgreSQL（./mvnw spring-boot:run で spring-boot-docker-compose が起動し、接続先も自動で設定する）
 # 値は手元専用。テスト（Testcontainers）と同じ postgres:17 を使う。
+# ホスト側のポートは空いている番号を Docker が選ぶ。外から入れないように 127.0.0.1 だけで待ち受ける。
 services:
   postgres:
     image: 'postgres:17'
@@ -8,4 +9,4 @@ services:
       - 'POSTGRES_PASSWORD=lending'
       - 'POSTGRES_USER=lending'
     ports:
-      - '5432'
+      - '127.0.0.1::5432'
