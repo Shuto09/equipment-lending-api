@@ -17,4 +17,15 @@
      WHERE id = #{id}
   </select>
 
+  <!--
+    貸出の判定の前に取る行ロック。同じ人の貸出を直列化し、未返却の件数の上限（R6）を数え間違えないようにする。
+    件数（集約）そのものは FOR UPDATE でロックできず、これから入る貸出の行もまだ無いので、利用者行を代表としてロックする。
+  -->
+  <select id="lockById" resultMap="userRow">
+    SELECT id, display_name, email, role
+      FROM users
+     WHERE id = #{id}
+       FOR UPDATE
+  </select>
+
 </mapper>

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  貸出の SQL（docs/要件と設計.md §8〜§10）。
+  - 値はすべて #{}（バインド変数）で渡す。文字列をそのまま埋め込む書き方はしない（MapperXmlSafetyTest で検査）。
+  - DB の時刻関数は使わない。今日の日付・日時はアプリの Clock から #{today} などで受ける（同じテストで検査）。
+  - 「延滞」は保存せず、未返却かつ due_date < #{today} で毎回求める（R9）。
+-->
+<mapper namespace="com.example.lending.loan.LoanMapper">
+
+  <resultMap id="loanView" type="LoanView">
+    <constructor>
+      <idArg column="id" javaType="_long"/>
+      <arg column="equipment_id" javaType="_long"/>
+      <arg column="asset_code" javaType="String"/>
+      <arg column="equipment_name" javaType="String"/>
+      <arg column="borrower_id" javaType="_long"/>
+      <arg column="borrower_name" javaType="String"/>
+      <arg column="lent_at" javaType="java.time.OffsetDateTime"/>
+      <arg column="due_date" javaType="java.time.LocalDate"/>
+      <arg column="returned_at" javaType="java.time.OffsetDateTime"/>
+    </constructor>
+  </resultMap>
+
+  <resultMap id="overdueLoanView" type="OverdueLoanView">
+    <constructor>
+      <idArg column="id" javaType="_long"/>
+      <arg column="equipment_id" javaType="_long"/>
+      <arg column="asset_code" javaType="String"/>
+      <arg column="equipment_name" javaType="String"/>
+      <arg column="borrower_id" javaType="_long"/>
+      <arg column="borrower_name" javaType="String"/>
+      <arg column="borrower_email" javaType="String"/>
+      <arg column="lent_at" javaType="java.time.OffsetDateTime"/>
+      <arg column="due_date" javaType="java.time.LocalDate"/>
+      <arg column="overdue_days" javaType="_int"/>
+    </constructor>
+  </resultMap>
+
+  <resultMap id="borrowerLoanStats" type="BorrowerLoanStats">
+    <constructor>
+      <arg column="open_count" javaType="_long"/>
+      <arg column="overdue_count" javaType="_long"/>
+    </constructor>
+  </resultMap>
+
+  <!-- 貸出＋備品の管理番号と名前＋借り手の表示名（メールアドレスは延滞一覧でだけ読む） -->
+  <sql id="loanWithNames">
+    SELECT l.id, l.equipment_id, e.asset_code, e.name AS equipment_name,
+           l.borrower_id, u.display_name AS borrower_name,
+           l.lent_at, l.due_date, l.returned_at
+      FROM loans l
+      JOIN equipment e ON e.id = l.equipment_id
+      JOIN users u ON u.id = l.borrower_id
+  </sql>
+
+  <!-- 同じ備品の未返却が既にあれば、部分一意インデックス uq_loans_open_equipment に当たって失敗する（R1 の最後の砦） -->
+  <insert id="insert" useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+    INSERT INTO loans (equipment_id, borrower_id, lent_at, due_date)
+    VALUES (#{equipmentId}, #{borrowerId}, #{lentAt}, #{dueDate})
+  </insert>
+
+  <select id="findView" resultMap="loanView">
+    <include refid="loanWithNames"/>
+     WHERE l.id = #{id}
+  </select>
+
+  <!-- 判定（未返却か）と書き込みを 1 文で行う。同時に 2 回返却しても、2 回目は行ロックを待った後に 0 件になる -->
+  <update id="markReturned">
+    UPDATE loans
+       SET returned_at = #{returnedAt}
+     WHERE id = #{loanId}
+       AND returned_at IS NULL
+  </update>
+
+  <!-- 貸出の判定（R5・R6）に使う。利用者行をロックした後に読むので、同じ人の確定済みの貸出はすべて数えに入る -->
+  <select id="statsByBorrower" resultMap="borrowerLoanStats">
+    SELECT count(*) AS open_count,
+           count(*) FILTER (WHERE due_date &lt; #{today}) AS overdue_count
+      FROM loans
+     WHERE borrower_id = #{borrowerId}
+       AND returned_at IS NULL
+  </select>
+
+  <!-- 件数の文と一覧の文で同じ条件を使う（食い違いを防ぐ） -->
+  <sql id="searchWhere">
+    <where>
+      <choose>
+        <when test="state.name() == 'OPEN'">AND l.returned_at IS NULL</when>
+        <when test="state.name() == 'RETURNED'">AND l.returned_at IS NOT NULL</when>
+        <!-- ALL は絞らない -->
+      </choose>
+      <if test="borrowerId != null">AND l.borrower_id = #{borrowerId}</if>
+      <if test="equipmentId != null">AND l.equipment_id = #{equipmentId}</if>
+    </where>
+  </sql>
+
+  <select id="search" resultMap="loanView">
+    <include refid="loanWithNames"/>
+    <include refid="searchWhere"/>
+     ORDER BY
+    <!-- 並び替えは許可リスト（LoanSortKey）の名前で列を選ぶ。利用者の入力は SQL の文字列に入らない -->
+    <choose>
+      <when test="sort.key().name() == 'DUE_DATE'">l.due_date</when>
+      <otherwise>l.lent_at</otherwise>
+    </choose>
+    <if test="sort.descending()">DESC</if>, l.id
+     LIMIT #{limit} OFFSET #{offset}
+  </select>
+
+  <select id="count" resultType="_long">
+    SELECT count(*)
+      FROM loans l
+    <include refid="searchWhere"/>
+  </select>
+
+  <!-- 部分索引 ix_loans_open_due_date (due_date, id) WHERE returned_at IS NULL と同じ条件・同じ順 -->
+  <sql id="overdueWhere">
+     WHERE l.returned_at IS NULL
+       AND l.due_date &lt; #{today}
+  </sql>
+
+  <!--
+    延滞日数の多い順＝返却期限の古い順。式（今日 − 期限）ではなく列で並べ、索引の順に読めるようにする。
+    延滞日数は date − date（整数の日数）で求める。
+  -->
+  <select id="findOverdue" resultMap="overdueLoanView">
+    SELECT l.id, l.equipment_id, e.asset_code, e.name AS equipment_name,
+           l.borrower_id, u.display_name AS borrower_name, u.email AS borrower_email,
+           l.lent_at, l.due_date, CAST(#{today} AS date) - l.due_date AS overdue_days
+      FROM loans l
+      JOIN equipment e ON e.id = l.equipment_id
+      JOIN users u ON u.id = l.borrower_id
+    <include refid="overdueWhere"/>
+     ORDER BY l.due_date, l.id
+     LIMIT #{limit} OFFSET #{offset}
+  </select>
+
+  <select id="countOverdue" resultType="_long">
+    SELECT count(*)
+      FROM loans l
+    <include refid="overdueWhere"/>
+  </select>
+
+</mapper>

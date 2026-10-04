@@ -28,11 +28,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.postgresql.util.PSQLException;
-import org.postgresql.util.ServerErrorMessage;
 
 import org.springframework.dao.DuplicateKeyException;
 
+import static com.example.lending.support.PostgresErrors.duplicateKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
@@ -295,13 +294,6 @@ class EquipmentServiceTest {
 		BusinessException ex = catchThrowableOfType(BusinessException.class, call::execute);
 		assertThat(ex).as("BusinessException が投げられること").isNotNull();
 		assertThat(ex.code()).isEqualTo(expected);
-	}
-
-	/** PostgreSQL が返すのと同じ形の一意制約違反（制約名つき）。 */
-	static DuplicateKeyException duplicateKey(String constraint) {
-		String fields = String.join("\0", "SERROR", "C23505", "Mduplicate key value violates unique constraint",
-				"n" + constraint) + "\0";
-		return new DuplicateKeyException("duplicate key", new PSQLException(new ServerErrorMessage(fields)));
 	}
 
 }

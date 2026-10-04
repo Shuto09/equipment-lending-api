@@ -94,21 +94,28 @@ public class TestData {
 			.single();
 	}
 
+	/** 同時実行のテスト用の利用者（user01@example.com・「利用者 01」など）。 */
+	public long member(int number) {
+		String no = "%02d".formatted(number);
+		return user("利用者 " + no, "user" + no + "@example.com", Role.MEMBER);
+	}
+
 	/** 未返却の貸出（貸出日時は基準の 7 日前）。 */
 	public long openLoan(long equipmentId, long borrowerId, LocalDate dueDate) {
-		return jdbc.sql("""
-				INSERT INTO loans (equipment_id, borrower_id, lent_at, due_date)
-				VALUES (?, ?, ?, ?) RETURNING id""")
-			.params(equipmentId, borrowerId, BASE.minusDays(7), dueDate)
-			.query(Long.class)
-			.single();
+		return loan(equipmentId, borrowerId, BASE.minusDays(7), dueDate, null);
 	}
 
 	public long returnedLoan(long equipmentId, long borrowerId, LocalDate dueDate, OffsetDateTime returnedAt) {
+		return loan(equipmentId, borrowerId, BASE.minusDays(7), dueDate, returnedAt);
+	}
+
+	/** 貸出の行。returnedAt が null なら未返却。 */
+	public long loan(long equipmentId, long borrowerId, OffsetDateTime lentAt, LocalDate dueDate,
+			OffsetDateTime returnedAt) {
 		return jdbc.sql("""
 				INSERT INTO loans (equipment_id, borrower_id, lent_at, due_date, returned_at)
 				VALUES (?, ?, ?, ?, ?) RETURNING id""")
-			.params(equipmentId, borrowerId, BASE.minusDays(7), dueDate, returnedAt)
+			.params(equipmentId, borrowerId, lentAt, dueDate, returnedAt)
 			.query(Long.class)
 			.single();
 	}
