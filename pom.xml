@@ -111,6 +111,32 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+			<!--
+				テストの JVM の起動時の引数。どれもテストのログに出る警告を消すためのもの（docs/テスト計画.md §2）。
+				- -javaagent: Mockito をエージェントとして読み込む（Mockito の文書の方法）。無いと、実行中に自分を読み込む
+				  （self-attaching）警告が毎回出て、将来の JDK では動かなくなる。jar のパス ${org.mockito:mockito-core:jar} は
+				  dependency:properties が作る。
+				- -Xshare:off: Mockito が起動後にブートストラップのクラスパスを足すと、クラスデータ共有（CDS）の警告が出るため。
+				- enable-native-access: Testcontainers が使う JNA のネイティブ呼び出しの警告（JDK 24 以降）を出さないため。
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>properties</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<argLine>-javaagent:${org.mockito:mockito-core:jar} -Xshare:off --enable-native-access=ALL-UNNAMED</argLine>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
 

@@ -28,10 +28,10 @@
    検索条件は `<where>`・`<if>`・`<foreach>` で組み、並び替えは enum の名前を `<choose>` で列に対応させます。利用者の入力が SQL の文字列に入る経路がありません（[`EquipmentMapper.xml`](src/main/resources/mapper/equipment/EquipmentMapper.xml#L61-L93)・[`SortParser`](src/main/java/com/example/lending/shared/paging/SortParser.java)）。
    マッパー XML に `${}` と DB の時刻関数が無いこと、Java に SQL の注釈が無いことは [`MapperXmlSafetyTest`](src/test/java/com/example/lending/MapperXmlSafetyTest.java) で機械的に確かめます。件数と一覧は同じ条件の断片を使い、REPEATABLE READ で同じ時点から読みます。
 4. **時刻の出どころを 1 つにする。**
-   SQL の中で `now()` を使わず、サービスが 1 回の操作で 1 回だけ `Clock` から読み、日本時間の業務日付にして判定と保存の両方に使います（[`LoanService#lend`](src/main/java/com/example/lending/loan/LoanService.java#L62-L65)・[`LendingProperties`](src/main/java/com/example/lending/shared/config/LendingProperties.java)）。
+   SQL の中で `now()` を使わず、サービスが 1 回の操作で 1 回だけ `Clock` から読み、日本時間の業務日付にして判定と保存の両方に使います（[`LoanService#lend`](src/main/java/com/example/lending/loan/LoanService.java#L62-L65)・[`LendingProperties`](src/main/java/com/example/lending/shared/config/LendingProperties.java)）。`Clock` は DB と同じマイクロ秒にそろえるので、保存の時の丸めで日付がずれません（[`ClockConfig`](src/main/java/com/example/lending/shared/config/ClockConfig.java)）。
    延滞は保存せず「返却期限 < 今日」で毎回求めます。テストでは時計を固定したり進めたりします。
 5. **エラー応答を ProblemDetail（RFC 9457）にそろえる。**
-   すべての失敗応答に機械で見分ける `code` が付きます。`type` は入力検証・認証・業務エラーではコードごとの URI、HTTP の状態以上の意味が無いもの（404・405 など）では `about:blank` です（[`ErrorCode`](src/main/java/com/example/lending/shared/error/ErrorCode.java)・[`ApiExceptionHandler`](src/main/java/com/example/lending/shared/error/ApiExceptionHandler.java)）。409（対象の今の状態と衝突）と 422（業務規則に反する）を使い分けます。
+   アプリ（Spring MVC）に届いた要求の失敗応答には、機械で見分ける `code` が付きます（URL の形が壊れているなど、手前の Tomcat で弾かれる要求は除く。[要件と設計 §7](docs/要件と設計.md#7-エラーの表し方problemdetailrfc-9457)）。`type` は入力検証・401・403・業務エラー（404 の `EQUIPMENT_NOT_FOUND` なども含む）ではコードごとの URI、存在しないパスの 404・405・406・415・500 などでは `about:blank` です（[`ErrorCode`](src/main/java/com/example/lending/shared/error/ErrorCode.java)・[`ApiExceptionHandler`](src/main/java/com/example/lending/shared/error/ApiExceptionHandler.java)）。409（対象の今の状態と衝突）と 422（業務規則に反する）を使い分けます。
    500 では例外の詳細を応答に出さず、一般的な文と `traceId` を返します（詳細は同じ `traceId` でログにだけ出す）。認証は引数の解決より前の interceptor で行うので、401 は入力検証の 400 より先に返ります（[`AuthenticationInterceptor`](src/main/java/com/example/lending/user/AuthenticationInterceptor.java)）。
 6. **競合を実際に起こしてテストする。**
    8 本のスレッドを `CountDownLatch` でそろえ、本物の PostgreSQL 17 に同時に書き込みます（[`ConcurrentLendingTest`](src/test/java/com/example/lending/loan/ConcurrentLendingTest.java#L158-L190)）。
@@ -54,7 +54,7 @@
 
 ## API
 
-`/api/**` のすべての API に、利用者の ID を入れた `X-User-Id` ヘッダが要ります（デモ方式の認証）。成功は `application/json`、失敗は `application/problem+json` で返します。
+`/api/**` のすべての API に、利用者の ID を入れた `X-User-Id` ヘッダが要ります（デモ方式の認証）。成功は `application/json`、アプリに届いた要求の失敗は `application/problem+json` で返します。
 
 | # | メソッド | パス | 誰が | 何をする |
 |---|---|---|---|---|
@@ -73,14 +73,21 @@
 
 ## 動かし方
 
-必要なもの: JDK 21 以上と Docker（`docker compose` が使えること）。Windows の PowerShell では `./mvnw` を `.\mvnw.cmd` に読み替えてください。
+必要なもの: JDK 21 以上と Docker（`docker compose` が使えること）。
 
 ```sh
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=demo
 ```
 
-- [`compose.yaml`](compose.yaml) の PostgreSQL 17 を、Spring Boot（`spring-boot-docker-compose`）が起動して接続先も設定します。アプリを止めるとコンテナも止まります。
+Windows の PowerShell では `./mvnw` を `.\mvnw.cmd` に読み替え、`.` を含む `-D` の引数を引用符で囲んでください（囲まないと PowerShell が `.` の位置で引数を 2 つに分け、Maven が `Unknown lifecycle phase` で失敗します。`-DexcludedGroups=docker` のように `.` を含まない引数はそのままで動きます）。
+
+```powershell
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=demo"
+```
+
+- [`compose.yaml`](compose.yaml) の PostgreSQL 17 を、Spring Boot（`spring-boot-docker-compose`）が起動して接続先も設定します。アプリを止めるとコンテナも止まります（消えはしないので、DB の中身は次の起動に残ります）。最初からやり直す時は、リポジトリの直下で `docker compose down -v` を実行して手元の DB を消してから起動します。
 - `demo` プロファイルは、架空の初期データ（利用者 4 人・備品 8 台・未返却の貸出 2 件。[`R__demo_data.sql`](src/main/resources/db/demo/R__demo_data.sql)）も入れます。一度 `demo` で起動した DB は、以後も `demo` を付けて起動してください（適用済みの初期データのマイグレーションが見つからない状態を作らないため）。
+- `demo` プロファイルでは、アプリは `127.0.0.1` だけで待ち受けます。デモの認証は誰でも ADMIN を名乗れるので、ほかの端末からは使えないようにしています（[`application-demo.properties`](src/main/resources/application-demo.properties)）。ほかの端末から使う時は、自分の責任で環境変数 `SERVER_ADDRESS` を変えてください。
 - 起動すると次が開きます。
 
 | 何 | URL |
@@ -98,11 +105,11 @@
 | 3 | 佐藤 花子 | MEMBER |
 | 4 | 田中 次郎 | MEMBER |
 
-初期データの日付は 2026 年 9〜10 月で固定です。後の日付で動かすと、山田さんと佐藤さんの貸出は延滞として扱われ、2 人は新しく借りられません（422 `BORROWER_HAS_OVERDUE`）。田中さんは貸出を持たないので、いつでも借りる操作を試せます。
+初期データの日付は 2026 年 9〜10 月で固定です。佐藤さんの貸出は返却期限（2026-10-02）を過ぎた延滞中で、山田さんの貸出も 2026-10-15 を過ぎると延滞になります。延滞のある人は新しく借りられません（422 `BORROWER_HAS_OVERDUE`）。田中さんは貸出を持たないので、いつでも借りる操作を試せます。
 
 ### curl の例
 
-bash などのシェルで、新しい DB に `demo` の初期データを入れて起動した直後に、上から順に流す前提です（id は初期データの並びで決まります）。借りる例の `dueDate` は、今日から 14 日後までの日付に置き換えてください。
+bash などのシェルで、新しい DB（上の `docker compose down -v` の後）に `demo` の初期データを入れて起動した直後に、上から順に流す前提です（id は初期データの並びで決まります。2 回目に流すと、登録済み・廃棄済み・返却済みの 409 などになります）。借りる例の `dueDate` は、今日から 14 日後までの日付に置き換えてください。
 
 ```sh
 # 空いている備品を、名前の降順で探す（山田）
@@ -141,7 +148,7 @@ curl -s -i http://localhost:8080/api/equipment
   "id": 3,
   "equipment": { "id": 1, "assetCode": "PC-0001", "name": "ノート PC 14 インチ" },
   "borrower": { "id": 4, "displayName": "田中 次郎" },
-  "lentAt": "2026-10-04T16:27:55.26448+09:00",
+  "lentAt": "2026-10-04T17:00:30.008177+09:00",
   "dueDate": "2026-10-11",
   "returnedAt": null,
   "state": "LENT",
@@ -160,7 +167,7 @@ curl -s -i http://localhost:8080/api/equipment
 }
 ```
 
-この節の curl は、2026-10-04 に上の `./mvnw spring-boot:run -Dspring-boot.run.profiles=demo` で起動したアプリ（新しい DB・`demo` の初期データ）に対して上から順に 1 回ずつ実行し、状態コードと応答を確かめました。確かめた環境の都合で、環境変数をいくつか足しています（待ち受けのアドレスとポートなど。詳細は [AI開発の手順](docs/AI開発の手順.md#readme-の例の確かめ方)）。
+この節の curl は、2026-10-04 に上の `./mvnw spring-boot:run -Dspring-boot.run.profiles=demo` で起動したアプリ（新しい DB・`demo` の初期データ）に対して上から順に 1 回ずつ実行し、状態コードと応答を確かめました。レビューの指摘を反映した後（初期データの日付と待ち受けのアドレスを変えた後）にも、新しい DB でもう一度流しています。上の応答の実例は、その時の出力を整形したものです。確かめた環境の都合で、環境変数を足しています（ポートと compose のプロジェクト名。詳細は [AI開発の手順](docs/AI開発の手順.md#readme-の例の確かめ方)）。
 
 ## テストの回し方
 
@@ -169,20 +176,20 @@ curl -s -i http://localhost:8080/api/equipment
 | 単体・Web 層・機械的な検査だけ（速い） | `./mvnw -B -ntp test -DexcludedGroups=docker` | 不要 |
 | 全部（本物の PostgreSQL 17 を Testcontainers で起動） | `./mvnw -B -ntp verify` | 要る |
 
-GitHub Actions（[`ci.yml`](.github/workflows/ci.yml)）は、push と pull request で `./mvnw -B -ntp verify` を流します。
+GitHub Actions（[`ci.yml`](.github/workflows/ci.yml)）は、`main` への push と、すべての pull request で `./mvnw -B -ntp verify` を流します。
 
 | 層 | 主なテストクラス | 件数 |
 |---|---|---|
-| 単体（Mockito・DB なし） | `LoanServiceTest`・`EquipmentServiceTest`・`SortParserTest`・`LikePatternsTest` | 71 |
+| 単体（Mockito・DB なし） | `LoanServiceTest`・`EquipmentServiceTest`・`SortParserTest`・`LikePatternsTest`・`ClockConfigTest` | 79 |
 | 機械的な検査 | `MapperXmlSafetyTest`（`${}`・時刻関数・SQL の注釈が 0 件） | 31 |
-| Web 層（`@WebMvcTest`） | `EquipmentControllerTest`・`LoanControllerTest`・`ApiExceptionHandlerTest` | 93 |
+| Web 層（`@WebMvcTest`） | `EquipmentControllerTest`・`LoanControllerTest`・`ApiExceptionHandlerTest` | 106 |
 | マッパー（本物の PostgreSQL） | `EquipmentMapperTest`・`LoanMapperTest`・`UserMapperTest`・`SchemaConstraintTest` | 46 |
 | アプリ全体（本物の PostgreSQL） | `ConcurrentLendingTest`・`LendingApiEndToEndTest`・`OpenApiContractTest`・`PublicEndpointsTest`・起動確認 | 73 |
 
 実測（2026-10-04）:
 
-- `./mvnw -B -ntp verify`: 314 件すべて成功（失敗・エラー・スキップ 0）。Maven の所要時間 27.4 秒（コンパイルと Testcontainers の起動を含む）。Docker の動く Linux マシン（Intel Core i5-6400・4 コア）の `eclipse-temurin:25-jdk` のコンテナの中で実行。
-- `./mvnw -B -ntp test -DexcludedGroups=docker`: 195 件すべて成功。Maven の所要時間 13.0 秒（本体はコンパイル済みの状態から。テストのコンパイルを含む）。Windows 11・JDK 21 で実行。
+- `./mvnw -B -ntp verify`: 335 件すべて成功（失敗・エラー・スキップ 0）。Maven の所要時間 28.1 秒（コンパイルと Testcontainers の起動を含む）。Docker の動く Linux マシン（Intel Core i5-6400・4 コア）の `eclipse-temurin:25-jdk` のコンテナの中で実行。
+- `./mvnw -B -ntp test -DexcludedGroups=docker`: 216 件すべて成功。Maven の所要時間 13.4 秒（本体はコンパイル済みの状態から。テストのコンパイルを含む）。Windows 11・JDK 21 で実行。
 - 受け入れ条件（AC-01〜AC-24）とテストの対応は [テスト計画 §6](docs/テスト計画.md#6-受け入れ条件とテストの対応) にあります。テストの `@DisplayName` にも AC の番号を付けています。
 
 ## SQL の実行計画
@@ -218,13 +225,13 @@ GitHub Actions（[`ci.yml`](.github/workflows/ci.yml)）は、push と pull requ
 └── CLAUDE.md                          このリポジトリで AI に作業させる時の決まり
 ```
 
-規模（2026-10-04 に `wc -l` で数えた値。コメントと空行を含む）: 本体の Java 55 ファイル・1,896 行、マッパー XML 3 ファイル・326 行、テストの Java 25 ファイル・3,628 行。
+規模（2026-10-04 に `wc -l` で数えた値。コメントと空行を含む）: 本体の Java 56 ファイル・1,939 行、マッパー XML 3 ファイル・326 行、テストの Java 26 ファイル・3,901 行。
 
 ## 本番で使うなら
 
 この見本では範囲の外にしたものです（[要件と設計 §2・§12](docs/要件と設計.md#12-認証デモ方式と非機能)）。
 
-- **認証**: `X-User-Id` は誰でも他人を名乗れます。Spring Security の OAuth 2.0 リソースサーバー（OIDC のアクセストークン）に置き換えます。差し替えるのは interceptor と引数のリゾルバだけで、サービスは変わりません。
+- **認証**: `X-User-Id` は誰でも他人を名乗れます。Spring Security の OAuth 2.0 リソースサーバー（OIDC のアクセストークン）に置き換えます。サービスは `CurrentUser` しか知らないので変わりません。変わるのは、認証の入口（interceptor・引数のリゾルバ・`WebConfig` の登録）、OpenAPI のヘッダの定義（`OpenApiConfig`）、Spring Security のフィルタが返す 401・403 を今と同じ ProblemDetail にする `AuthenticationEntryPoint`・`AccessDeniedHandler`（フィルタの例外は `@RestControllerAdvice` に届かないため）と、その周りのテストです（[要件と設計 §12](docs/要件と設計.md#12-認証デモ方式と非機能)）。
 - **エラーの `type`**: `https://example.com/problems/…` は仮の値です。自分のドメインにして説明のページを置きます。
 - **OpenAPI と Swagger UI**: 公開しない環境では `springdoc.api-docs.enabled=false`・`springdoc.swagger-ui.enabled=false` で止めます。
 - **DB の接続情報**: `compose.yaml` の値は手元専用です。本番は環境変数などで渡します。

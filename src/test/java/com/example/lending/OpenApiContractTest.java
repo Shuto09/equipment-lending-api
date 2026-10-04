@@ -1,10 +1,17 @@
 package com.example.lending;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import com.example.lending.support.AppDbTest;
 import com.example.lending.user.AuthenticationInterceptor;
@@ -19,24 +26,18 @@ import org.springframework.test.web.servlet.client.RestTestClient;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * API 一覧（docs/要件と設計.md §6 の 10 本）と、springdoc が出す OpenAPI（/v3/api-docs）が一致することの機械検査
- * （docs/テスト計画.md §3）。API を足した・消した時に、設計書か実装のどちらかの直し忘れで赤になる。
+ * API 一覧（docs/要件と設計.md §6 の表）と、springdoc が出す OpenAPI（/v3/api-docs）が一致することの機械検査
+ * （docs/テスト計画.md §3）。設計書の表をこのテストが読んで比べるので、API を足した・消した時に、
+ * 設計書か実装のどちらかを直し忘れると赤になる。
  */
 @AppDbTest
 class OpenApiContractTest {
 
-	/** 設計 §6 の表と同じ並び。 */
-	private static final Set<String> DESIGNED_OPERATIONS = Set.of(
-			"POST /api/equipment",
-			"GET /api/equipment",
-			"GET /api/equipment/{id}",
-			"PATCH /api/equipment/{id}",
-			"POST /api/equipment/{id}/dispose",
-			"POST /api/loans",
-			"GET /api/loans",
-			"GET /api/loans/{id}",
-			"POST /api/loans/{id}/return",
-			"GET /api/loans/overdue");
+	private static final Path DESIGN_DOC = Path.of("docs", "要件と設計.md");
+
+	/** §6 の表の行（例 {@code | 1 | POST | `/api/equipment` | ADMIN | …}）から、メソッドとパスを取り出す。 */
+	private static final Pattern API_ROW = Pattern
+		.compile("^\\|\\s*\\d+\\s*\\|\\s*(GET|POST|PUT|PATCH|DELETE)\\s*\\|\\s*`(/api/[^`]+)`\\s*\\|");
 
 	private static final List<String> HTTP_METHODS = List.of("get", "put", "post", "delete", "options", "head", "patch",
 			"trace");
@@ -60,9 +61,12 @@ class OpenApiContractTest {
 	}
 
 	@Test
-	@DisplayName("OpenAPI の「メソッド＋パス」の集合が、設計 §6 の 10 本と一致する")
-	void operations_matchDesignedApiList() {
-		assertThat(operations().keySet()).containsExactlyInAnyOrderElementsOf(DESIGNED_OPERATIONS);
+	@DisplayName("OpenAPI の「メソッド＋パス」の集合が、設計 §6 の API 一覧の表と一致する")
+	void operations_matchDesignedApiList() throws IOException {
+		Set<String> designed = designedOperations();
+
+		assertThat(designed).as("設計 §6 の表から API を読み取れること").isNotEmpty();
+		assertThat(operations().keySet()).containsExactlyInAnyOrderElementsOf(designed);
 	}
 
 	@Test
@@ -87,6 +91,21 @@ class OpenApiContractTest {
 			.extracting(parameter -> parameter.get("name"))
 			.doesNotContain("user"));
 		assertThat(apiDocs).doesNotContain("CurrentUser");
+	}
+
+	/** 設計書の §6 の節（「## 6.」から「## 7.」の前まで）にある表の行を "POST /api/equipment" の形で集める。 */
+	private static Set<String> designedOperations() throws IOException {
+		String doc = Files.readString(DESIGN_DOC, StandardCharsets.UTF_8);
+		int start = doc.indexOf("\n## 6. ");
+		int end = doc.indexOf("\n## 7. ");
+		assertThat(start).as("設計書に §6 がある").isNotNegative();
+		assertThat(end).as("設計書に §7 がある").isGreaterThan(start);
+		return doc.substring(start, end)
+			.lines()
+			.map(API_ROW::matcher)
+			.filter(Matcher::find)
+			.map(row -> row.group(1) + " " + row.group(2))
+			.collect(Collectors.toSet());
 	}
 
 	/** "GET /api/equipment" → 操作の定義。パスの直下にある操作以外の項目（parameters など）は除く。 */

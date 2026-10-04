@@ -7,6 +7,7 @@ import com.example.lending.shared.paging.PageQuery;
 import com.example.lending.shared.paging.PageResult;
 import com.example.lending.shared.paging.SortOrder;
 import com.example.lending.shared.paging.SortParser;
+import com.example.lending.shared.validation.TextPatterns;
 import com.example.lending.user.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -14,6 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import org.springframework.http.HttpStatus;
@@ -63,7 +65,8 @@ public class EquipmentController {
 	@Operation(summary = "備品を探す", description = "既定では廃棄済みを除く。並びが同じ行は id 順")
 	public PageResult<EquipmentSummaryResponse> search(
 			@Parameter(description = "名前・管理番号の部分一致（大文字小文字を区別しない）") @RequestParam(
-					required = false) @Size(max = 50) String keyword,
+					required = false) @Size(max = 50) @Pattern(regexp = TextPatterns.NO_CONTROL,
+							message = "改行・タブ・NUL などの制御文字は使えません") String keyword,
 			@Parameter(description = "区分（複数可）") @RequestParam(required = false) List<EquipmentCategory> category,
 			@Parameter(description = "貸出状態") @RequestParam(required = false) Availability availability,
 			@Parameter(description = "並び替え。assetCode（既定）・name・category・createdAt・dueDate。向きは ,asc（既定）か ,desc",

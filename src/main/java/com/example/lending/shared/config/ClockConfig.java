@@ -1,6 +1,8 @@
 package com.example.lending.shared.config;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,9 +14,13 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class ClockConfig {
 
+	/**
+	 * DB（timestamptz）の精度のマイクロ秒に切り捨てた時刻。ナノ秒のまま渡すと保存の時に切り上げられることがあり、
+	 * 日本時間の 23:59:59.9999995 以降では、判定に使った日付と保存した日時の日付が食い違う（docs/要件と設計.md §5）。
+	 */
 	@Bean
 	Clock clock() {
-		return Clock.systemUTC();
+		return Clock.tick(Clock.systemUTC(), Duration.of(1, ChronoUnit.MICROS));
 	}
 
 }

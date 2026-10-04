@@ -23,7 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * E2E（docs/テスト計画.md §4-4）。本物の PostgreSQL につないだアプリを HTTP で叩き、登録から廃棄までを 1 本通す。
- * 手順の番号はテスト計画の番号と同じ。時計は 2026-10-05 10:00 日本時間から始まり、手順 6 で 2026-10-14 に進める。
+ * 手順の番号はテスト計画の番号と同じ。時計は 2026-10-05 10:00 日本時間から始まり、手順 6 で 2026-10-14 8:00 日本時間
+ * （UTC ではまだ 10-13）に進める。業務日付を UTC で求める誤りがあると、手順 6 の延滞日数が 1 になって赤になる。
  */
 @AppDbTest
 class LendingApiEndToEndTest {
@@ -121,8 +122,8 @@ class LendingApiEndToEndTest {
 			.jsonPath("$.instance")
 			.isEqualTo("/api/loans");
 
-		// 6. 時計を 2026-10-14 に進める → 延滞一覧に 1 件・延滞日数 2・メールアドレスを含む
-		clock.set(OffsetDateTime.parse("2026-10-14T10:00:00+09:00").toInstant());
+		// 6. 時計を 2026-10-14 8:00 日本時間（UTC では 10-13 23:00）に進める → 延滞一覧に 1 件・延滞日数 2・メールアドレスを含む
+		clock.set(OffsetDateTime.parse("2026-10-14T08:00:00+09:00").toInstant());
 		get("/api/loans/overdue", admin).expectStatus()
 			.isOk()
 			.expectBody()
@@ -142,7 +143,7 @@ class LendingApiEndToEndTest {
 			.jsonPath("$.state")
 			.isEqualTo("RETURNED")
 			.jsonPath("$.returnedAt")
-			.isEqualTo("2026-10-14T10:00:00+09:00")
+			.isEqualTo("2026-10-14T08:00:00+09:00")
 			.jsonPath("$.returnedLate")
 			.isEqualTo(true);
 

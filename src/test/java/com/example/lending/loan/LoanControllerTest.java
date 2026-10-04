@@ -119,6 +119,36 @@ class LoanControllerTest {
 	}
 
 	@ParameterizedTest(name = "{0}")
+	@CsvSource({ "BORROWER_HAS_OVERDUE", "LOAN_LIMIT_EXCEEDED", "DUE_DATE_OUT_OF_RANGE" })
+	@DisplayName("AC-09〜AC-11 業務規則の違反（延滞あり・件数の上限・期限の範囲）は 422")
+	void lend_businessRuleViolation_returns422(ErrorCode code) {
+		given(loanService.lend(any(), any())).willThrow(new BusinessException(code, "テスト用の説明"));
+
+		assertThat(mvc.post()
+			.uri("/api/loans")
+			.header("X-User-Id", "2")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("""
+					{"equipmentId": 7, "dueDate": "2026-10-12"}""")).hasStatus(HttpStatus.UNPROCESSABLE_CONTENT)
+			.bodyJson()
+			.extractingPath("$.code")
+			.isEqualTo(code.name());
+	}
+
+	@Test
+	@DisplayName("AC-03 MEMBER の延滞一覧は 403 FORBIDDEN")
+	void listOverdue_member_returns403() {
+		given(loanService.listOverdue(any(), any()))
+			.willThrow(new BusinessException(ErrorCode.FORBIDDEN, "延滞一覧は管理者（ADMIN）だけが見られます"));
+
+		assertThat(mvc.get().uri("/api/loans/overdue").header("X-User-Id", "2")).hasStatus(HttpStatus.FORBIDDEN)
+			.bodyJson()
+			.extractingPath("$.code")
+			.isEqualTo("FORBIDDEN");
+		verify(loanService).listOverdue(YAMADA, new PageQuery(0, 20));
+	}
+
+	@ParameterizedTest(name = "{0}")
 	@CsvSource(delimiter = '|', textBlock = """
 			'{"equipmentId": 7, "dueDate": "2026/10/12"}'   | #/dueDate     | 日付は yyyy-MM-dd の形で指定してください
 			'{"equipmentId": 7, "dueDate": "2026-02-30"}'   | #/dueDate     | 日付は yyyy-MM-dd の形で指定してください

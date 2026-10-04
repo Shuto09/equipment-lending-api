@@ -1,6 +1,7 @@
 package com.example.lending.shared.error;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.Optional;
 
 import com.example.lending.equipment.Availability;
@@ -38,6 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
+import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.BDDMockito.given;
@@ -51,6 +53,44 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @Import(ApiExceptionHandlerTest.ThrowingController.class)
 @ExtendWith(OutputCaptureExtension.class)
 class ApiExceptionHandlerTest {
+
+	private static final String TYPE_BASE = "https://example.com/problems/";
+
+	/**
+	 * 設計 §7 の「code ↔ 状態 ↔ type ↔ title」を書き写した期待値。ErrorCode（本体の enum）から期待値を作ると、
+	 * 403・409・422 の取り違えをテストが見逃すので、ここでは値をそのまま書く。
+	 */
+	private static final Map<ErrorCode, DesignedProblem> DESIGNED_PROBLEMS = Map.ofEntries(
+			entry(ErrorCode.VALIDATION_FAILED, new DesignedProblem(400, TYPE_BASE + "validation-failed", "入力が正しくありません")),
+			entry(ErrorCode.UNAUTHENTICATED, new DesignedProblem(401, TYPE_BASE + "unauthenticated", "利用者を確認できません")),
+			entry(ErrorCode.FORBIDDEN, new DesignedProblem(403, TYPE_BASE + "forbidden", "この操作の権限がありません")),
+			entry(ErrorCode.EQUIPMENT_NOT_FOUND,
+					new DesignedProblem(404, TYPE_BASE + "equipment-not-found", "備品が見つかりません")),
+			entry(ErrorCode.LOAN_NOT_FOUND, new DesignedProblem(404, TYPE_BASE + "loan-not-found", "貸出が見つかりません")),
+			entry(ErrorCode.ASSET_CODE_DUPLICATED,
+					new DesignedProblem(409, TYPE_BASE + "asset-code-duplicated", "管理番号が登録済みです")),
+			entry(ErrorCode.EQUIPMENT_ALREADY_LENT,
+					new DesignedProblem(409, TYPE_BASE + "equipment-already-lent", "貸出中の備品です")),
+			entry(ErrorCode.EQUIPMENT_DISPOSED,
+					new DesignedProblem(409, TYPE_BASE + "equipment-disposed", "廃棄済みの備品です")),
+			entry(ErrorCode.EQUIPMENT_IN_USE,
+					new DesignedProblem(409, TYPE_BASE + "equipment-in-use", "貸出中の備品は廃棄できません")),
+			entry(ErrorCode.LOAN_ALREADY_RETURNED,
+					new DesignedProblem(409, TYPE_BASE + "loan-already-returned", "返却済みの貸出です")),
+			entry(ErrorCode.VERSION_CONFLICT,
+					new DesignedProblem(409, TYPE_BASE + "version-conflict", "ほかの更新と競合しました")),
+			entry(ErrorCode.DUE_DATE_OUT_OF_RANGE,
+					new DesignedProblem(422, TYPE_BASE + "due-date-out-of-range", "返却期限が範囲の外です")),
+			entry(ErrorCode.BORROWER_HAS_OVERDUE,
+					new DesignedProblem(422, TYPE_BASE + "borrower-has-overdue", "延滞中の貸出があります")),
+			entry(ErrorCode.LOAN_LIMIT_EXCEEDED,
+					new DesignedProblem(422, TYPE_BASE + "loan-limit-exceeded", "貸出の上限に達しています")),
+			entry(ErrorCode.NOT_FOUND, new DesignedProblem(404, "about:blank", "Not Found")),
+			entry(ErrorCode.METHOD_NOT_ALLOWED, new DesignedProblem(405, "about:blank", "Method Not Allowed")),
+			entry(ErrorCode.NOT_ACCEPTABLE, new DesignedProblem(406, "about:blank", "Not Acceptable")),
+			entry(ErrorCode.UNSUPPORTED_MEDIA_TYPE, new DesignedProblem(415, "about:blank", "Unsupported Media Type")),
+			entry(ErrorCode.REQUEST_REJECTED, new DesignedProblem(400, "about:blank", "Bad Request")),
+			entry(ErrorCode.INTERNAL_ERROR, new DesignedProblem(500, "about:blank", "Internal Server Error")));
 
 	@Autowired
 	private MockMvcTester mvc;
@@ -223,19 +263,18 @@ class ApiExceptionHandlerTest {
 
 	@ParameterizedTest
 	@EnumSource(ErrorCode.class)
-	@DisplayName("ErrorCode のすべてが HTTP の状態・code・type・title に変換される")
+	@DisplayName("ErrorCode のすべてが、設計 §7 の表どおりの HTTP の状態・type・title に変換される（403・409・422 の取り違えを見つける）")
 	void everyErrorCode_isConverted(ErrorCode code) {
+		DesignedProblem designed = DESIGNED_PROBLEMS.get(code);
+		assertThat(designed).as("設計 §7 の表（このテストの DESIGNED_PROBLEMS）に %s が無い", code).isNotNull();
+
 		MvcTestResult result = withUser(mvc.get().uri("/api/test/business/{code}", code));
 
-		assertProblem(result, code.status(), code);
-		String title = code.title() != null ? code.title() : code.status().getReasonPhrase();
+		assertProblem(result, HttpStatus.valueOf(designed.status()), code);
 		assertThat(result).bodyJson()
 			.isLenientlyEqualTo("""
 					{"type": "%s", "title": "%s", "status": %d, "detail": "テスト用の説明", "instance": "/api/test/business/%s"}"""
-				.formatted(code.type(), title, code.status().value(), code));
-		if (code.title() != null) {
-			assertThat(code.type().toString()).startsWith("https://example.com/problems/");
-		}
+				.formatted(designed.type(), designed.title(), designed.status(), code));
 	}
 
 	@Test
@@ -263,6 +302,10 @@ class ApiExceptionHandlerTest {
 		assertThat(result).hasStatus(status).hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
 		assertThat(result).bodyJson().extractingPath("$.code").isEqualTo(code.name());
 		assertThat(result).bodyJson().extractingPath("$.status").asNumber().isEqualTo(status.value());
+	}
+
+	/** 設計 §7 の表の 1 行（状態・type・title）。 */
+	private record DesignedProblem(int status, String type, String title) {
 	}
 
 	/** 起こしにくい例外を投げるテスト専用のコントローラ。 */

@@ -68,6 +68,14 @@ class LoanServiceTest {
 
 	private static final LocalDate TODAY = LocalDate.of(2026, 10, 5);
 
+	/**
+	 * UTC と日本時間で日付がずれる時刻: UTC では 2026-10-05 15:30、日本時間では 2026-10-06 0:30。
+	 * 業務日付を UTC（本番の Clock は systemUTC）で求める誤りを、この時刻で見つける。
+	 */
+	private static final Instant AFTER_MIDNIGHT_IN_TOKYO = Instant.parse("2026-10-05T15:30:00Z");
+
+	private static final LocalDate TOKYO_DATE_AFTER_MIDNIGHT = LocalDate.of(2026, 10, 6);
+
 	private static final LendingProperties LENDING = new LendingProperties(TOKYO, 14, 3);
 
 	private static final CurrentUser ADMIN = new CurrentUser(1, Role.ADMIN);
@@ -173,6 +181,30 @@ class LoanServiceTest {
 			}
 			assertCode(() -> service.lend(YAMADA, request(dueDate)), ErrorCode.DUE_DATE_OUT_OF_RANGE);
 			verifyNoInteractions(userMapper, equipmentMapper, loanMapper);
+		}
+
+		@ParameterizedTest(name = "期限 {0} → 通るか: {1}")
+		@CsvSource({ "2026-10-05, false", "2026-10-06, true", "2026-10-20, true", "2026-10-21, false" })
+		@DisplayName("AC-11 今日は日本時間の日付: UTC で 10-05 15:30（日本時間 10-06 0:30）なら、期限は 10-06〜10-20 で、件数・延滞も 10-06 で数える")
+		void lend_dueDateRange_usesTokyoDate(LocalDate dueDate, boolean accepted) {
+			LoanService afterMidnightInTokyo = service(Clock.fixed(AFTER_MIDNIGHT_IN_TOKYO, ZoneOffset.UTC));
+			if (accepted) {
+				lendable(0, TOKYO_DATE_AFTER_MIDNIGHT); // statsByBorrower に 10-06 が渡らなければ失敗する
+				insertAssignsIdAndViewReturns(dueDate);
+				assertThat(afterMidnightInTokyo.lend(YAMADA, request(dueDate)).dueDate()).isEqualTo(dueDate);
+				return;
+			}
+			assertCode(() -> afterMidnightInTokyo.lend(YAMADA, request(dueDate)), ErrorCode.DUE_DATE_OUT_OF_RANGE);
+			verifyNoInteractions(userMapper, equipmentMapper, loanMapper);
+		}
+
+		@Test
+		@DisplayName("利用者行をロックした時に行が無ければ 401 UNAUTHENTICATED。備品のロックと INSERT に進まない")
+		void lend_userNotFound_unauthenticated() {
+			given(userMapper.lockById(YAMADA.id())).willReturn(Optional.empty());
+
+			assertCode(() -> service.lend(YAMADA, request(TODAY)), ErrorCode.UNAUTHENTICATED);
+			verifyNoInteractions(equipmentMapper, loanMapper);
 		}
 
 		@Test
@@ -446,6 +478,22 @@ class LoanServiceTest {
 				assertThat(item.lentAt()).isEqualTo(OffsetDateTime.parse("2026-09-28T10:00:00+09:00"));
 			});
 			assertThat(result.totalElements()).isEqualTo(1);
+		}
+
+		@Test
+		@DisplayName("AC-13 今日は日本時間の日付: UTC で 10-05 15:30（日本時間 10-06 0:30）なら、期限 10-05 の未返却は詳細・一覧で OVERDUE、延滞一覧には 10-06 を渡す")
+		void read_usesTokyoDate() {
+			LoanService afterMidnightInTokyo = service(Clock.fixed(AFTER_MIDNIGHT_IN_TOKYO, ZoneOffset.UTC));
+			given(loanMapper.findView(LOAN_ID)).willReturn(Optional.of(openView(YAMADA.id(), TODAY)));
+			given(loanMapper.search(any())).willReturn(List.of(openView(YAMADA.id(), TODAY)));
+
+			assertThat(afterMidnightInTokyo.get(YAMADA, LOAN_ID).state()).isEqualTo(LoanState.OVERDUE);
+			assertThat(afterMidnightInTokyo.list(YAMADA, condition(null), new PageQuery(0, 20)).items())
+				.extracting(LoanResponse::state)
+				.containsExactly(LoanState.OVERDUE);
+			afterMidnightInTokyo.listOverdue(ADMIN, new PageQuery(0, 20));
+			verify(loanMapper).countOverdue(TOKYO_DATE_AFTER_MIDNIGHT);
+			verify(loanMapper).findOverdue(TOKYO_DATE_AFTER_MIDNIGHT, 20, 0);
 		}
 
 		private static LoanSearchCondition condition(Long borrowerId) {

@@ -3,6 +3,8 @@
 -- 人名・メールアドレス・管理番号はすべて架空。
 -- 新しい DB に流した場合の利用者の id: 1 = 鈴木 一郎（ADMIN）・2 = 山田 太郎・3 = 佐藤 花子・4 = 田中 次郎（X-User-Id に使う）。
 -- 日付は固定（時刻を決めるのはアプリの Clock だけ、という方針に合わせる）。動かす日によっては貸出が延滞に見える。
+-- 貸出の日時は README の例を確かめた日（2026-10-04）より前にする（未来の貸出日時だと、それより前の返却が
+-- CHECK ck_loans_returned_after_lent に当たって 500 になる）。
 -- 田中さんには貸出を持たせない（いつ動かしても延滞が無く、借りる操作を試せるように）。
 
 INSERT INTO users (display_name, email, role) VALUES
@@ -29,12 +31,13 @@ ON CONFLICT (asset_code) DO NOTHING;
 
 -- 未返却の貸出だけを入れる（返却済みの行は重複を判定する一意の手がかりが無く、再実行のたびに増えるため）。
 -- id は固定できないので、利用者と備品は自然キー（メールアドレス・管理番号）で引く。
+-- この SQL はアプリの判定を通らない書き込みなので、廃棄済みの備品（再実行の時点で廃棄されたものを含む）には入れない（R2）。
 INSERT INTO loans (equipment_id, borrower_id, lent_at, due_date)
 SELECT e.id, u.id, v.lent_at, v.due_date
   FROM (VALUES
-          ('PC-0002', 'yamada@example.com', timestamptz '2026-10-05 10:00:00+09', date '2026-10-19'),
+          ('PC-0002', 'yamada@example.com', timestamptz '2026-10-01 10:00:00+09', date '2026-10-15'),
           ('PJ-0001', 'sato@example.com',   timestamptz '2026-09-25 13:00:00+09', date '2026-10-02')
        ) AS v (asset_code, email, lent_at, due_date)
-  JOIN equipment e ON e.asset_code = v.asset_code
+  JOIN equipment e ON e.asset_code = v.asset_code AND e.status = 'ACTIVE'
   JOIN users u ON u.email = v.email
 ON CONFLICT (equipment_id) WHERE returned_at IS NULL DO NOTHING;

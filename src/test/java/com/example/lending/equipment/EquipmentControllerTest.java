@@ -204,6 +204,26 @@ class EquipmentControllerTest {
 		verifyNoInteractions(equipmentService);
 	}
 
+	@ParameterizedTest(name = "{0}")
+	@CsvSource(delimiter = '|', textBlock = """
+			'   '                | 空白だけの名称は使えません
+			'\\u3000\\u3000' | 空白だけの名称は使えません
+			'\\u00a0'          | 空白だけの名称は使えません
+			'ノート PC\\n14'     | 名称に改行・タブ・NUL などの制御文字は使えません
+			'a\\u0000b'        | 名称に改行・タブ・NUL などの制御文字は使えません
+			""")
+	@DisplayName("AC-23 名称: 空白だけ（全角スペース・NBSP も空白）と制御文字（改行・NUL など）は 400。理由ごとに文を分ける")
+	void register_blankOrControlName_returns400(String name, String detail) {
+		// name は JSON の文字列の中身として送る（全角スペース・改行・NUL は JSON のエスケープで書く）
+		assertThat(register("""
+				{"assetCode": "PC-0001", "name": "%s", "category": "LAPTOP"}""".formatted(name)))
+			.hasStatus(HttpStatus.BAD_REQUEST)
+			.bodyJson()
+			.isLenientlyEqualTo("""
+					{"code": "VALIDATION_FAILED", "errors": [{"pointer": "#/name", "detail": "%s"}]}""".formatted(detail));
+		verifyNoInteractions(equipmentService);
+	}
+
 	@Test
 	@DisplayName("名称が 100 字を超えると 400（100 字は通る）")
 	void register_nameTooLong_returns400() {
@@ -229,22 +249,61 @@ class EquipmentControllerTest {
 
 	@ParameterizedTest(name = "{0}")
 	@CsvSource(delimiter = '|', textBlock = """
-			'{"version": 1}'                    | 変更する項目（name・category・remarks）を 1 つ以上送ってください
-			'{"name": "   ", "version": 1}'     | 空白だけの名称は使えません
-			'{"name": "新しい名前"}'              | null は許可されていません
+			'{"version": 1}'                    | #/anyFieldPresent | 変更する項目（name・category・remarks）を 1 つ以上送ってください
+			'{"name": "   ", "version": 1}'     | #/name            | 空白だけの名称は使えません
+			'{"name": "\\u3000", "version": 1}' | #/name            | 空白だけの名称は使えません
+			'{"name": "新しい名前"}'              | #/version         | null は許可されていません
 			""")
-	@DisplayName("AC-23 変更する項目が 0 個・空白だけの名称・version なしの PATCH は 400")
-	void patch_noFieldsOrBlankName_returns400(String body, String detail) {
-		assertThat(mvc.patch()
-			.uri("/api/equipment/10")
-			.header("X-User-Id", "1")
-			.contentType(MediaType.APPLICATION_JSON)
-			.content(body)).hasStatus(HttpStatus.BAD_REQUEST)
+	@DisplayName("AC-23 変更する項目が 0 個・空白だけの名称・version なしの PATCH は 400（0 個の時の pointer は #/anyFieldPresent）")
+	void patch_noFieldsOrBlankName_returns400(String body, String pointer, String detail) {
+		assertThat(patch(body)).hasStatus(HttpStatus.BAD_REQUEST)
 			.bodyJson()
-			.extractingPath("$.errors[*].detail")
-			.asArray()
-			.contains(detail);
+			.isLenientlyEqualTo("""
+					{"code": "VALIDATION_FAILED", "errors": [{"pointer": "%s", "detail": "%s"}]}""".formatted(pointer, detail));
 		verifyNoInteractions(equipmentService);
+	}
+
+	@Test
+	@DisplayName("PATCH の名称が 100 字を超えると 400（100 字は通る）")
+	void patch_nameTooLong_returns400() {
+		given(equipmentService.update(any(), anyLong(), any())).willReturn(response(Availability.AVAILABLE, null));
+		String json = """
+				{"name": "%s", "version": 0}""";
+
+		assertThat(patch(json.formatted("あ".repeat(101)))).hasStatus(HttpStatus.BAD_REQUEST)
+			.bodyJson()
+			.extractingPath("$.errors[*].pointer")
+			.asArray()
+			.containsExactly("#/name");
+		assertThat(patch(json.formatted("あ".repeat(100)))).hasStatusOk();
+	}
+
+	@Test
+	@DisplayName("備考は 500 字まで・改行とタブは使える。501 字と、ほかの制御文字（NUL など）は 400（登録・PATCH とも pointer は #/remarks）")
+	void remarks_lengthAndControlCharacters() {
+		given(equipmentService.register(any(), any())).willReturn(response(Availability.AVAILABLE, null));
+		given(equipmentService.update(any(), anyLong(), any())).willReturn(response(Availability.AVAILABLE, null));
+		String registerJson = """
+				{"assetCode": "PC-0001", "name": "ノート PC", "category": "LAPTOP", "remarks": "%s"}""";
+		String patchJson = """
+				{"remarks": "%s", "version": 0}""";
+
+		// 値は JSON の文字列の中身（改行・タブ・NUL などは JSON のエスケープで書く）
+		for (String accepted : List.of("あ".repeat(500), "1 行目\\r\\n2 行目\\tタブ")) {
+			assertThat(register(registerJson.formatted(accepted))).as(accepted).hasStatus(HttpStatus.CREATED);
+			assertThat(patch(patchJson.formatted(accepted))).as(accepted).hasStatusOk();
+		}
+		for (String rejected : List.of("あ".repeat(501), "x\\u0000", "x\\u001b")) {
+			for (MvcTestResult result : List.of(register(registerJson.formatted(rejected)),
+					patch(patchJson.formatted(rejected)))) {
+				assertThat(result).as(rejected)
+					.hasStatus(HttpStatus.BAD_REQUEST)
+					.bodyJson()
+					.extractingPath("$.errors[*].pointer")
+					.asArray()
+					.containsExactly("#/remarks");
+			}
+		}
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -281,6 +340,18 @@ class EquipmentControllerTest {
 	}
 
 	@Test
+	@DisplayName("キーワードに制御文字（NUL など）があると 400（DB に送らない）")
+	void search_keywordWithControlCharacter_returns400() {
+		assertThat(mvc.get().uri("/api/equipment").param("keyword", "pc\u0000").header("X-User-Id", "2"))
+			.hasStatus(HttpStatus.BAD_REQUEST)
+			.bodyJson()
+			.isLenientlyEqualTo("""
+					{"code": "VALIDATION_FAILED",
+					 "errors": [{"parameter": "keyword", "detail": "改行・タブ・NUL などの制御文字は使えません"}]}""");
+		verifyNoInteractions(equipmentService);
+	}
+
+	@Test
 	@DisplayName("AC-05 許可していない並び替えキーは 400 VALIDATION_FAILED（サービスを呼ばない）")
 	void search_unknownSort_returns400() {
 		assertThat(mvc.get().uri("/api/equipment?sort=name;DROP TABLE equipment").header("X-User-Id", "2"))
@@ -297,6 +368,24 @@ class EquipmentControllerTest {
 		given(equipmentService.search(any(), any())).willReturn(new PageResult<>(List.of(), 10000, 20, 0, 0));
 
 		assertThat(mvc.get().uri("/api/equipment?page=10000").header("X-User-Id", "2")).hasStatusOk();
+	}
+
+	private MvcTestResult register(String json) {
+		return mvc.post()
+			.uri("/api/equipment")
+			.header("X-User-Id", "1")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(json)
+			.exchange();
+	}
+
+	private MvcTestResult patch(String json) {
+		return mvc.patch()
+			.uri("/api/equipment/10")
+			.header("X-User-Id", "1")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(json)
+			.exchange();
 	}
 
 	private static EquipmentResponse response(Availability availability, CurrentLoan loan) {

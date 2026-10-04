@@ -29,8 +29,9 @@
 - `@Transactional` はサービスの公開メソッドだけに付ける。
 - ロックの順番は「利用者 → 備品」。ロックを取る操作を足す時は、要件と設計 §8・§9 の表を直し、逆の順番を作らない。
 - 一意制約違反は制約名（`DbConstraints`）で見分けて変換する。知らない制約は変換しない。
-- 業務エラーは `BusinessException(ErrorCode, detail)` で投げる。新しいエラーは `ErrorCode` に足し、要件と設計 §7 の表も直す。
-- API を足す・消す時は、要件と設計 §6 の表と `OpenApiContractTest` の一覧を同じ変更で直す。
+- 業務エラーは `BusinessException(ErrorCode, detail)` で投げる。新しいエラーは `ErrorCode` に足し、要件と設計 §7 の表と、それを書き写した `ApiExceptionHandlerTest` の期待値の表も直す。
+- API を足す・消す時は、要件と設計 §6 の表を同じ変更で直す（`OpenApiContractTest` がこの表を読み、OpenAPI の出力と比べる）。表の行の形（番号・メソッド・バッククォートで囲んだパスの順）は変えない。
+- 文字列の入力には、`TextPatterns` の正規表現で空白だけ・制御文字の検証を付ける（PostgreSQL は NUL を受け付けず、付け忘れると 400 ではなく 500 になる）。
 - テーブルを変える時は新しい Flyway のマイグレーション（`V2__…`）を足す。`V1` は書き換えない。
 - ログに個人情報（メールアドレス・表示名）を出さない。
 

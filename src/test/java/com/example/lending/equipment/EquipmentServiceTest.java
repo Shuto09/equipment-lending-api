@@ -280,6 +280,27 @@ class EquipmentServiceTest {
 
 	}
 
+	@Test
+	@DisplayName("今日は日本時間の日付: UTC で 10-05 15:30（日本時間 10-06 0:30）なら、検索・詳細・更新の貸出状態の判定に 10-06 を渡す")
+	void businessDate_isTokyoDate() {
+		EquipmentService afterMidnightInTokyo = new EquipmentService(mapper,
+				Clock.fixed(Instant.parse("2026-10-05T15:30:00Z"), ZoneOffset.UTC), new LendingProperties(TOKYO, 14, 3));
+		LocalDate tokyoDate = LocalDate.of(2026, 10, 6);
+		given(mapper.findView(ID, tokyoDate)).willReturn(Optional.of(view(Availability.AVAILABLE)));
+		given(mapper.updateWithVersion(any())).willReturn(1);
+
+		afterMidnightInTokyo.get(ID);
+		afterMidnightInTokyo.update(ADMIN, ID, new UpdateEquipmentRequest("名前", null, null, 0));
+		afterMidnightInTokyo.search(
+				new EquipmentSearchCondition(null, List.of(), null, SortOrder.asc(EquipmentSortKey.ASSET_CODE)),
+				new PageQuery(0, 20));
+
+		verify(mapper, times(2)).findView(ID, tokyoDate);
+		ArgumentCaptor<EquipmentSearchQuery> query = ArgumentCaptor.forClass(EquipmentSearchQuery.class);
+		verify(mapper).search(query.capture());
+		assertThat(query.getValue().today()).isEqualTo(tokyoDate);
+	}
+
 	private static EquipmentView view(Availability availability) {
 		return new EquipmentView(ID, "PC-0001", "ノート PC", EquipmentCategory.LAPTOP, null, availability, 0,
 				NOW_TOKYO, null, null, null, null);
